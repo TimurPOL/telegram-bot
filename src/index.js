@@ -330,12 +330,16 @@ async function showSubscription(chatId, telegramId, messageId = null) {
 }
 
 async function showLogin(chatId, telegramId, messageId = null) {
-  const user = db.getUserByTelegramId(telegramId);
-  if (!user?.client_login || !user.client_password) {
+  let user = db.getUserByTelegramId(telegramId);
+  if (!user) {
     await upsertPanelMessage(chatId, messageId, registerPromptText(), {
       reply_markup: registerKeyboard(),
     });
     return;
+  }
+
+  if (!user.client_login || !user.client_password) {
+    user = db.ensureUserCredentials(telegramId);
   }
 
   const entitlement = db.getUserEntitlementByTelegramId(telegramId);
