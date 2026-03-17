@@ -1,6 +1,22 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+function normalizeEnvValue(value) {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) {
     return;
@@ -37,7 +53,7 @@ function loadEnvFile(filePath) {
 loadEnvFile(path.resolve(process.cwd(), ".env"));
 
 function requireEnv(name) {
-  const value = process.env[name];
+  const value = normalizeEnvValue(process.env[name]);
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
   }
@@ -45,12 +61,13 @@ function requireEnv(name) {
 }
 
 function parseAdminIds(value) {
-  if (!value) {
+  const normalized = normalizeEnvValue(value || "");
+  if (!normalized) {
     return new Set();
   }
 
   return new Set(
-    value
+    normalized
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean)
@@ -62,22 +79,22 @@ function parseAdminIds(value) {
 const config = {
   botToken: requireEnv("BOT_TOKEN"),
   adminIds: parseAdminIds(process.env.ADMIN_IDS || ""),
-  dbPath: path.resolve(process.cwd(), process.env.DB_PATH || "./data/bot.sqlite"),
+  dbPath: path.resolve(process.cwd(), normalizeEnvValue(process.env.DB_PATH) || "./data/bot.sqlite"),
   supabase: {
-    url: process.env.SUPABASE_URL || "",
-    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
-    schema: process.env.SUPABASE_SCHEMA || "public",
+    url: normalizeEnvValue(process.env.SUPABASE_URL) || "",
+    serviceRoleKey: normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY) || "",
+    schema: normalizeEnvValue(process.env.SUPABASE_SCHEMA) || "public",
   },
   defaults: {
-    downloadUrl: process.env.DEFAULT_DOWNLOAD_URL || "",
+    downloadUrl: normalizeEnvValue(process.env.DEFAULT_DOWNLOAD_URL) || "",
     paymentText:
-      process.env.DEFAULT_PAYMENT_TEXT ||
-      'Оплатите подписку по инструкции администратора и нажмите "Я оплатил".',
-    currency: process.env.CURRENCY || "RUB",
+      normalizeEnvValue(process.env.DEFAULT_PAYMENT_TEXT) ||
+      'РћРїР»Р°С‚РёС‚Рµ РїРѕРґРїРёСЃРєСѓ РїРѕ РёРЅСЃС‚СЂСѓРєС†РёРё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° Рё РЅР°Р¶РјРёС‚Рµ "РЇ РѕРїР»Р°С‚РёР»".',
+    currency: normalizeEnvValue(process.env.CURRENCY) || "RUB",
     prices: {
-      "30d": Number(process.env.DEFAULT_PRICE_30D || "500"),
-      "90d": Number(process.env.DEFAULT_PRICE_90D || "1200"),
-      lifetime: Number(process.env.DEFAULT_PRICE_LIFETIME || "2500"),
+      "30d": Number(normalizeEnvValue(process.env.DEFAULT_PRICE_30D) || "500"),
+      "90d": Number(normalizeEnvValue(process.env.DEFAULT_PRICE_90D) || "1200"),
+      lifetime: Number(normalizeEnvValue(process.env.DEFAULT_PRICE_LIFETIME) || "2500"),
     },
   },
 };
