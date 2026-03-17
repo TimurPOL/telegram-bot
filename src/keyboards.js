@@ -98,6 +98,15 @@ function adminOrderKeyboard(orderId, userTelegramId) {
   };
 }
 
+function adminChatKeyboard(userTelegramId) {
+  return {
+    inline_keyboard: [
+      [{ text: "Открыть чат", callback_data: `admin-reply:${userTelegramId}` }],
+      [{ text: "Админ-панель", callback_data: "admin:panel" }],
+    ],
+  };
+}
+
 function downloadKeyboard(url) {
   return {
     inline_keyboard: [
@@ -166,6 +175,7 @@ function supportKeyboard() {
 }
 
 module.exports = {
+  adminChatKeyboard,
   adminOrderKeyboard,
   adminPanelKeyboard,
   backToMainKeyboard,

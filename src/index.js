@@ -2,6 +2,7 @@ const { config } = require("./config");
 const { BotDatabase } = require("./db");
 const { SupabaseSync } = require("./supabase");
 const {
+  adminChatKeyboard,
   adminOrderKeyboard,
   adminPanelKeyboard,
   backToMainKeyboard,
@@ -70,6 +71,50 @@ function clearSession(telegramId) {
 
 function getAdminTelegramIds() {
   return [...new Set([...config.adminIds, ...db.getAdminTelegramIds()])];
+}
+
+function getUserChatContext(telegramId) {
+  const openOrder = db.getLatestOpenOrderByTelegramId(telegramId);
+  if (openOrder) {
+    return {
+      type: "order",
+      order: openOrder,
+    };
+  }
+
+  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
+  if (!entitlement.has_access) {
+    return null;
+  }
+
+  return {
+    type: "subscription",
+    entitlement,
+  };
+}
+
+function chatContextLines(chatContext) {
+  if (!chatContext) {
+    return [];
+  }
+
+  if (chatContext.type === "order") {
+    return [
+      `Заказ: <code>${escapeHtml(chatContext.order.public_id)}</code>`,
+      `Тариф: ${escapeHtml(planTitle(chatContext.order.plan_code))}`,
+      `Статус заказа: ${escapeHtml(chatContext.order.status)}`,
+    ];
+  }
+
+  if (chatContext.entitlement.is_lifetime) {
+    return ["Подписка: активна навсегда"];
+  }
+
+  if (chatContext.entitlement.expires_at) {
+    return [`Подписка активна до: ${escapeHtml(formatDateTime(chatContext.entitlement.expires_at))} UTC`];
+  }
+
+  return ["Подписка: активна"];
 }
 
 async function upsertPanelMessage(chatId, messageId, text, options = {}) {
@@ -419,6 +464,18 @@ async function showHelp(chatId, telegramId, messageId = null) {
 }
 
 async function showSupportPrompt(chatId, telegramId, messageId = null) {
+  if (getUserChatContext(telegramId)) {
+    await upsertPanelMessage(
+      chatId,
+      messageId,
+      "Чат с администратором уже активен. Просто отправьте следующее сообщение, и оно уйдёт админу.",
+      {
+        reply_markup: supportKeyboard(),
+      },
+    );
+    return;
+  }
+
   setSession(telegramId, { mode: "awaiting_support_message" });
   await upsertPanelMessage(
     chatId,
@@ -489,6 +546,61 @@ async function sendToAdmins(text, options = {}) {
   }
 }
 
+async function notifyAdminsAboutNewOrder(orderId) {
+  const order = db.getOrderById(orderId);
+  if (!order) {
+    return;
+  }
+
+  await sendToAdmins(
+    [
+      "<b>Пользователь выбрал тариф</b>",
+      `Заказ: <code>${escapeHtml(order.public_id)}</code>`,
+      `Пользователь: <b>${escapeHtml(
+        formatUserName({
+          telegram_id: order.telegram_id,
+          username: order.username,
+          first_name: order.first_name,
+          last_name: order.last_name,
+        }),
+      )}</b>`,
+      `Telegram ID: <code>${order.telegram_id}</code>`,
+      `Тариф: ${escapeHtml(planTitle(order.plan_code))}`,
+      `Сумма: ${escapeHtml(formatPrice(order.amount, order.currency))}`,
+      "Чат с пользователем уже открыт.",
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: adminChatKeyboard(order.telegram_id),
+    },
+  );
+}
+
+async function relayUserChatMessage(currentUser, message) {
+  const messageText = message.text || "";
+  const chatContext = getUserChatContext(currentUser.telegram_id);
+  if (!chatContext || !messageText) {
+    return false;
+  }
+
+  db.saveSupportMessage(currentUser.id, message.message_id, messageText);
+  await sendToAdmins(
+    [
+      chatContext.type === "order" ? "<b>Чат по покупке</b>" : "<b>Чат с пользователем</b>",
+      `От: <b>${escapeHtml(formatUserName(currentUser))}</b>`,
+      `Telegram ID: <code>${currentUser.telegram_id}</code>`,
+      ...chatContextLines(chatContext),
+      "",
+      escapeHtml(messageText),
+    ].join("\n"),
+    {
+      parse_mode: "HTML",
+      reply_markup: adminChatKeyboard(currentUser.telegram_id),
+    },
+  );
+  return true;
+}
+
 async function createOrderAndPrompt(chatId, telegramUser, planCode) {
   const user = db.getUserByTelegramId(telegramUser.id);
   const plan = db.getPlan(planCode);
@@ -503,6 +615,14 @@ async function createOrderAndPrompt(chatId, telegramUser, planCode) {
     parse_mode: "HTML",
     reply_markup: orderPaymentKeyboard(order.id),
   });
+  await api.sendMessage(
+    chatId,
+    "Чат с администратором открыт. Можете сразу написать сюда сообщение по оплате или по заказу.",
+    {
+      reply_markup: supportKeyboard(),
+    },
+  );
+  await notifyAdminsAboutNewOrder(order.id);
 }
 
 async function notifyAdminsAboutPayment(orderId) {
@@ -542,6 +662,13 @@ async function approveOrder(orderId, adminTelegramId) {
     `Оплата подтверждена. ${subscriptionText(db.getUserEntitlementByTelegramId(order.telegram_id))}`,
     {
       reply_markup: mainKeyboard(isAdmin(order.telegram_id)),
+    },
+  );
+  await api.sendMessage(
+    order.telegram_id,
+    "Чат с администратором активен. Просто пишите сюда, и сообщение уйдёт админу через бота.",
+    {
+      reply_markup: supportKeyboard(),
     },
   );
 
@@ -650,6 +777,13 @@ async function handleAdminCommand(message, currentUser) {
         `Вам выдана ${planTitle(planCode).toLowerCase()}. ${subscriptionText(
           db.getUserEntitlementByTelegramId(targetId),
         )}`,
+      );
+      await api.sendMessage(
+        targetId,
+        "Чат с администратором активен. Просто пишите сюда, и сообщение уйдёт админу через бота.",
+        {
+          reply_markup: supportKeyboard(),
+        },
       );
       await api.sendMessage(
         targetId,
@@ -802,8 +936,9 @@ async function handleTextMessage(message) {
   await syncUserRecord(currentUser.telegram_id);
   const chatId = message.chat.id;
   const session = getSession(currentUser.telegram_id);
+  const messageText = message.text || "";
 
-  if (message.text && message.text.startsWith("/")) {
+  if (messageText.startsWith("/")) {
     if (isAdmin(currentUser.telegram_id)) {
       const handledAdmin = await handleAdminCommand(message, currentUser);
       if (handledAdmin) {
@@ -833,17 +968,16 @@ async function handleTextMessage(message) {
     return;
   }
 
-  if (isAdmin(currentUser.telegram_id) && session?.mode === "awaiting_reply") {
-    clearSession(currentUser.telegram_id);
-    await api.sendMessage(session.targetTelegramId, message.text || "");
-    await api.sendMessage(chatId, "Ответ отправлен от имени бота.");
+  if (isAdmin(currentUser.telegram_id) && session?.mode === "active_reply_chat") {
+    await api.sendMessage(session.targetTelegramId, messageText);
+    await api.sendMessage(chatId, "Сообщение отправлено пользователю. /cancel чтобы выйти из чата.");
     return;
   }
 
   if (session?.mode === "awaiting_support_message") {
     clearSession(currentUser.telegram_id);
-    db.saveSupportMessage(currentUser.id, message.message_id, message.text || "");
-    const safeText = escapeHtml(message.text || "");
+    db.saveSupportMessage(currentUser.id, message.message_id, messageText);
+    const safeText = escapeHtml(messageText);
     await sendToAdmins(
       [
         "<b>Новое сообщение в поддержку</b>",
@@ -865,7 +999,7 @@ async function handleTextMessage(message) {
     return;
   }
 
-  switch (message.text) {
+  switch (messageText) {
     case "Прайс":
       await showPrices(chatId, currentUser.telegram_id);
       return;
@@ -892,9 +1026,14 @@ async function handleTextMessage(message) {
         await showAdminPanel(chatId, currentUser.telegram_id);
       }
       return;
-    default:
-      await sendMainMenu(chatId, isAdmin(currentUser.telegram_id));
   }
+
+  if (!isAdmin(currentUser.telegram_id) && await relayUserChatMessage(currentUser, message)) {
+    await api.sendMessage(chatId, "Сообщение отправлено администратору.");
+    return;
+  }
+
+  await sendMainMenu(chatId, isAdmin(currentUser.telegram_id));
 }
 
 async function handleCallbackQuery(callbackQuery) {
@@ -1063,13 +1202,13 @@ async function handleCallbackQuery(callbackQuery) {
       }
       const targetTelegramId = Number(value);
       setSession(currentUser.telegram_id, {
-        mode: "awaiting_reply",
+        mode: "active_reply_chat",
         targetTelegramId,
       });
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Пришлите текст ответа" });
+      await api.answerCallbackQuery(callbackQuery.id, { text: "Чат открыт" });
       await api.sendMessage(
         currentUser.telegram_id,
-        `Режим ответа активирован для пользователя ${targetTelegramId}. Следующее сообщение уйдет от имени бота. /cancel чтобы выйти.`,
+        `Чат с пользователем ${targetTelegramId} открыт. Все следующие сообщения уйдут ему от имени бота. /cancel чтобы выйти.`,
       );
       return;
     }

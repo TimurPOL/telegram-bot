@@ -382,6 +382,25 @@ class BotDatabase {
       .all();
   }
 
+  getLatestOpenOrderByTelegramId(telegramId) {
+    return this.db
+      .prepare(`
+        SELECT
+          orders.*,
+          users.telegram_id,
+          users.username,
+          users.first_name,
+          users.last_name
+        FROM orders
+        JOIN users ON users.id = orders.user_id
+        WHERE users.telegram_id = ?
+          AND orders.status IN ('awaiting_payment', 'waiting_approval')
+        ORDER BY orders.updated_at DESC, orders.id DESC
+        LIMIT 1
+      `)
+      .get(telegramId);
+  }
+
   markOrderPaid(orderId) {
     return this.updateOrderStatus(orderId, "paid");
   }
