@@ -1,3 +1,5 @@
 node_modules/
 .env
 data/
+.idea/
+_tmp_tele_inspect/

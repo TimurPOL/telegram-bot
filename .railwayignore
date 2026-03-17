@@ -1,0 +1,6 @@
+.git
+.idea
+_tmp_tele_inspect
+node_modules
+.env
+data
