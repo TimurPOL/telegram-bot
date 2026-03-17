@@ -102,7 +102,7 @@ function adminChatKeyboard(userTelegramId) {
   return {
     inline_keyboard: [
       [{ text: "Открыть чат", callback_data: `admin-reply:${userTelegramId}` }],
-      [{ text: "Админ-панель", callback_data: "admin:panel" }],
+      [{ text: "Закрыть чат", callback_data: `admin-close-chat:${userTelegramId}` }],
     ],
   };
 }

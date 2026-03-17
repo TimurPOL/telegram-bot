@@ -79,6 +79,7 @@ function parseAdminIds(value) {
 const config = {
   botToken: requireEnv("BOT_TOKEN"),
   adminIds: parseAdminIds(process.env.ADMIN_IDS || ""),
+  textAdminIds: parseAdminIds(process.env.TEXT_ADMIN_IDS || ""),
   dbPath: path.resolve(process.cwd(), normalizeEnvValue(process.env.DB_PATH) || "./data/bot.sqlite"),
   supabase: {
     url: normalizeEnvValue(process.env.SUPABASE_URL) || "",

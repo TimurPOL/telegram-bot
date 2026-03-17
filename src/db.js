@@ -86,6 +86,7 @@ class BotDatabase {
   migrate() {
     this.ensureColumn("users", "client_login", "client_login TEXT");
     this.ensureColumn("users", "client_password", "client_password TEXT");
+    this.ensureColumn("users", "chat_enabled", "chat_enabled INTEGER NOT NULL DEFAULT 0");
     this.db.exec(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_client_login
       ON users(client_login)
@@ -209,6 +210,24 @@ class BotDatabase {
 
   getAllUsers() {
     return this.db.prepare("SELECT * FROM users ORDER BY id ASC").all();
+  }
+
+  isChatEnabled(telegramId) {
+    const row = this.db
+      .prepare("SELECT chat_enabled FROM users WHERE telegram_id = ?")
+      .get(telegramId);
+    return Boolean(row?.chat_enabled);
+  }
+
+  setChatEnabled(telegramId, enabled) {
+    return this.db
+      .prepare(`
+        UPDATE users
+        SET chat_enabled = ?, updated_at = ?
+        WHERE telegram_id = ?
+        RETURNING *
+      `)
+      .get(enabled ? 1 : 0, nowIso(), telegramId);
   }
 
   ensureUserCredentials(telegramId) {
