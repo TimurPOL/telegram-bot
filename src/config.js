@@ -83,7 +83,10 @@ const config = {
   dbPath: path.resolve(process.cwd(), normalizeEnvValue(process.env.DB_PATH) || "./data/bot.sqlite"),
   supabase: {
     url: normalizeEnvValue(process.env.SUPABASE_URL) || "",
-    serviceRoleKey: normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY) || "",
+    serviceRoleKey:
+      normalizeEnvValue(process.env.SUPABASE_SERVICE_ROLE_KEY) ||
+      normalizeEnvValue(process.env.SUPABASE_KEY) ||
+      "",
     schema: normalizeEnvValue(process.env.SUPABASE_SCHEMA) || "public",
   },
   defaults: {
