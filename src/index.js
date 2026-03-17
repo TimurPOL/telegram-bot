@@ -514,6 +514,18 @@ async function showLogin(chatId, telegramId, messageId = null) {
 
 async function showRegister(chatId, telegramId, messageId = null) {
   const user = db.getUserByTelegramId(telegramId);
+  if (hasClientCredentials(user)) {
+    await upsertPanelMessage(
+      chatId,
+      messageId,
+      "Вы уже зарегистрированы. Повторная регистрация невозможна.\nИспользуйте /login, чтобы увидеть ваши данные.",
+      {
+        reply_markup: backToMainKeyboard(),
+      },
+    );
+    return;
+  }
+
   setSession(telegramId, { mode: "awaiting_client_login" });
   await upsertPanelMessage(chatId, messageId, registerStartText(user));
 }
@@ -1679,7 +1691,18 @@ async function startPolling() {
 async function main() {
   await setupBotCommands();
 
+  console.log("--- Supabase Diagnostic ---");
+  console.log(`SUPABASE_URL found: ${Boolean(config.supabase.url)}`);
+  console.log(`SUPABASE_KEY/SERVICE_ROLE found: ${Boolean(config.supabase.serviceRoleKey)}`);
+  
+  if (config.supabase.serviceRoleKey) {
+     const key = config.supabase.serviceRoleKey;
+     console.log(`Key starts with: ${key.substring(0, 10)}...`);
+  }
+  
   console.log(`Supabase Sync: ${supabaseSync.enabled ? "ENABLED" : "DISABLED"}`);
+  console.log("---------------------------");
+
   if (supabaseSync.enabled) {
     console.log(`Supabase URL: ${config.supabase.url}`);
   }
