@@ -174,10 +174,7 @@ class BotDatabase {
           username = excluded.username,
           first_name = excluded.first_name,
           last_name = excluded.last_name,
-          is_admin = CASE
-            WHEN users.is_admin = 1 OR excluded.is_admin = 1 THEN 1
-            ELSE 0
-          END,
+          is_admin = excluded.is_admin,
           updated_at = excluded.updated_at
         RETURNING *
       `)

@@ -35,26 +35,12 @@ const sessions = new Map();
 
 function isAdmin(telegramId) {
   const numericTelegramId = Number(telegramId);
-  if (config.adminIds.has(numericTelegramId)) {
-    return true;
-  }
-
-  const existingUser = db.getUserByTelegramId(numericTelegramId);
-  return Boolean(existingUser?.is_admin);
+  return config.adminIds.has(numericTelegramId);
 }
 
 function shouldGrantAdmin(telegramId) {
   const numericTelegramId = Number(telegramId);
-  if (config.adminIds.has(numericTelegramId)) {
-    return true;
-  }
-
-  const existingUser = db.getUserByTelegramId(numericTelegramId);
-  if (existingUser?.is_admin) {
-    return true;
-  }
-
-  return config.adminIds.size === 0 && !db.hasAnyAdmin();
+  return config.adminIds.has(numericTelegramId);
 }
 
 function getSession(telegramId) {
@@ -70,7 +56,18 @@ function clearSession(telegramId) {
 }
 
 function getAdminTelegramIds() {
-  return [...new Set([...config.adminIds, ...db.getAdminTelegramIds()])];
+  return [...config.adminIds];
+}
+
+function getReplyTargetTelegramId(message) {
+  const replyText = message.reply_to_message?.text || message.reply_to_message?.caption || "";
+  const match = replyText.match(/Telegram ID:\s*(\d+)/i);
+  if (!match) {
+    return null;
+  }
+
+  const targetTelegramId = Number(match[1]);
+  return Number.isInteger(targetTelegramId) ? targetTelegramId : null;
 }
 
 function getUserChatContext(telegramId) {
@@ -937,6 +934,9 @@ async function handleTextMessage(message) {
   const chatId = message.chat.id;
   const session = getSession(currentUser.telegram_id);
   const messageText = message.text || "";
+  const replyTargetTelegramId = isAdmin(currentUser.telegram_id)
+    ? getReplyTargetTelegramId(message)
+    : null;
 
   if (messageText.startsWith("/")) {
     if (isAdmin(currentUser.telegram_id)) {
@@ -965,6 +965,15 @@ async function handleTextMessage(message) {
       }
     }
     await api.sendMessage(chatId, `Рассылка завершена. Отправлено: ${sent}`);
+    return;
+  }
+
+  if (replyTargetTelegramId) {
+    await api.sendMessage(replyTargetTelegramId, messageText);
+    await api.sendMessage(
+      chatId,
+      `Сообщение отправлено пользователю ${replyTargetTelegramId}. /cancel чтобы выйти из активного чата.`,
+    );
     return;
   }
 
