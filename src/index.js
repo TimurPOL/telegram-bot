@@ -104,7 +104,7 @@ function mainPanelText(adminFlag) {
 
 function readyRegisterText(user) {
   if (!user?.client_login || !user.client_password) {
-    return "Готовый register: register nick password";
+    return null;
   }
 
   return `Готовый register: register ${user.client_login} ${user.client_password}`;
@@ -123,7 +123,9 @@ function credentialsText(user, entitlement) {
       : entitlement.expires_at
         ? `Подписка до: ${formatDateTime(entitlement.expires_at)} UTC`
         : "Подписка пока не активна",
-  ].join("\n");
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
 }
 
 function registerPromptText() {
@@ -131,6 +133,19 @@ function registerPromptText() {
     "Аккаунт клиента еще не создан.",
     "Напишите /register, чтобы создать логин и пароль.",
   ].join("\n");
+}
+
+function ensureClientCredentials(telegramId) {
+  const user = db.getUserByTelegramId(telegramId);
+  if (!user) {
+    return null;
+  }
+
+  if (user.client_login && user.client_password) {
+    return user;
+  }
+
+  return db.ensureUserCredentials(telegramId);
 }
 
 async function syncUserRecord(telegramId) {
@@ -182,6 +197,7 @@ async function syncAllUsersToSupabase() {
 
   let synced = 0;
   for (const user of db.getAllUsers()) {
+    ensureClientCredentials(user.telegram_id);
     await syncUserRecord(user.telegram_id);
     synced += 1;
   }
@@ -339,16 +355,12 @@ async function showSubscription(chatId, telegramId, messageId = null) {
 }
 
 async function showLogin(chatId, telegramId, messageId = null) {
-  let user = db.getUserByTelegramId(telegramId);
+  let user = ensureClientCredentials(telegramId);
   if (!user) {
     await upsertPanelMessage(chatId, messageId, registerPromptText(), {
       reply_markup: registerKeyboard(),
     });
     return;
-  }
-
-  if (!user.client_login || !user.client_password) {
-    user = db.ensureUserCredentials(telegramId);
   }
 
   const entitlement = db.getUserEntitlementByTelegramId(telegramId);
@@ -785,7 +797,8 @@ async function handleTextMessage(message) {
     return;
   }
 
-  const currentUser = db.upsertUser(message.from, shouldGrantAdmin(message.from.id));
+  let currentUser = db.upsertUser(message.from, shouldGrantAdmin(message.from.id));
+  currentUser = ensureClientCredentials(currentUser.telegram_id) || currentUser;
   await syncUserRecord(currentUser.telegram_id);
   const chatId = message.chat.id;
   const session = getSession(currentUser.telegram_id);
@@ -887,7 +900,8 @@ async function handleTextMessage(message) {
 async function handleCallbackQuery(callbackQuery) {
   const from = callbackQuery.from;
   const data = callbackQuery.data || "";
-  const currentUser = db.upsertUser(from, shouldGrantAdmin(from.id));
+  let currentUser = db.upsertUser(from, shouldGrantAdmin(from.id));
+  currentUser = ensureClientCredentials(currentUser.telegram_id) || currentUser;
   await syncUserRecord(currentUser.telegram_id);
   const message = callbackQuery.message;
   const chatId = message?.chat?.id;
