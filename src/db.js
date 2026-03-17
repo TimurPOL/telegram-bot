@@ -116,6 +116,14 @@ class BotDatabase {
     `);
 
     upsertPlan.run(
+      "7d",
+      "Подписка на 7 дней",
+      7,
+      this.defaults.prices["7d"],
+      this.defaults.currency,
+      now,
+    );
+    upsertPlan.run(
       "30d",
       "Подписка на 30 дней",
       30,
@@ -273,7 +281,7 @@ class BotDatabase {
       .prepare(`
         SELECT * FROM plans
         WHERE is_active = 1
-        ORDER BY CASE code WHEN '30d' THEN 1 WHEN '90d' THEN 2 ELSE 3 END
+        ORDER BY CASE code WHEN '7d' THEN 1 WHEN '30d' THEN 2 WHEN '90d' THEN 3 ELSE 4 END
       `)
       .all();
   }

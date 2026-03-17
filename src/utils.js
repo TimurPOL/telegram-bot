@@ -56,6 +56,9 @@ function normalizePlanCode(value) {
     .toLowerCase();
 
   const aliases = {
+    "7": "7d",
+    "7d": "7d",
+    week: "7d",
     "30": "30d",
     "30d": "30d",
     "30д": "30d",
@@ -77,6 +80,8 @@ function normalizePlanCode(value) {
 
 function planTitle(code) {
   switch (code) {
+    case "7d":
+      return "Подписка на 7 дней";
     case "30d":
       return "Подписка на 30 дней";
     case "90d":

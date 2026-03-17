@@ -48,8 +48,11 @@ class TelegramApi {
     });
   }
 
-  setMyCommands(commands) {
-    return this.call("setMyCommands", { commands });
+  setMyCommands(commands, options = {}) {
+    return this.call("setMyCommands", {
+      commands,
+      ...options,
+    });
   }
 }
 

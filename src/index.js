@@ -206,7 +206,7 @@ async function syncUserRecord(telegramId) {
     username: user.username,
     first_name: user.first_name,
     last_name: user.last_name,
-    is_admin: Boolean(user.is_admin),
+    is_admin: isAdmin(user.telegram_id),
     client_login: user.client_login,
     client_password: user.client_password,
     has_access: entitlement.has_access,
@@ -318,11 +318,12 @@ function adminHelpText() {
   return [
     "Админ-команды:",
     "/admin - открыть админ-панель",
-    "/setprice <30d|90d|lifetime> <цена> - изменить цену",
+    "/setprice <7d|30d|90d|lifetime> <цена> - изменить цену",
     "/setdownload <url> - изменить ссылку на скачивание без перезапуска",
     "/getdownload - показать текущую ссылку на скачивание",
     "/setpayment <текст> - изменить инструкцию по оплате",
-    "/grant <telegram_id> <30d|90d|lifetime> - выдать подписку вручную",
+    "/getpayment - показать текущую инструкцию по оплате",
+    "/grant <telegram_id> <7d|30d|90d|lifetime> - выдать подписку вручную",
     "/resetlogin <telegram_id> - пересоздать логин и пароль пользователя",
     "/say <telegram_id> <текст> - отправить сообщение от имени бота",
     "/broadcast <текст> - рассылка всем пользователям",
@@ -709,7 +710,7 @@ async function handleAdminCommand(message, currentUser) {
     const planCode = normalizePlanCode(rest[0]);
     const amount = Number(rest[1]);
     if (!planCode || !Number.isFinite(amount) || amount <= 0) {
-      await api.sendMessage(chatId, "Использование: /setprice <30d|90d|lifetime> <цена>");
+      await api.sendMessage(chatId, "Использование: /setprice <7d|30d|90d|lifetime> <цена>");
       return true;
     }
 
@@ -752,11 +753,18 @@ async function handleAdminCommand(message, currentUser) {
     return true;
   }
 
+  if (command === "/getpayment") {
+    await pullSettingFromSupabase("payment_text");
+    const currentPaymentText = db.getSetting("payment_text") || "(РїСѓСЃС‚Рѕ)";
+    await api.sendMessage(chatId, `РўРµРєСѓС‰Р°СЏ РёРЅСЃС‚СЂСѓРєС†РёСЏ РїРѕ РѕРїР»Р°С‚Рµ:\n${currentPaymentText}`);
+    return true;
+  }
+
   if (command === "/grant") {
     const targetId = Number(rest[0]);
     const planCode = normalizePlanCode(rest[1]);
     if (!Number.isInteger(targetId) || !planCode) {
-      await api.sendMessage(chatId, "Использование: /grant <telegram_id> <30d|90d|lifetime>");
+      await api.sendMessage(chatId, "Использование: /grant <telegram_id> <7d|30d|90d|lifetime>");
       return true;
     }
 
@@ -1302,19 +1310,46 @@ async function handleUpdate(update) {
   }
 }
 
+function publicBotCommands() {
+  return [
+    { command: "start", description: "Открыть меню" },
+    { command: "prices", description: "Прайс" },
+    { command: "buy", description: "Купить подписку" },
+    { command: "mysub", description: "Статус подписки" },
+    { command: "register", description: "Создать логин" },
+    { command: "login", description: "Логин клиента" },
+    { command: "download", description: "Скачать" },
+    { command: "support", description: "Написать админу" },
+  ];
+}
+
+function adminBotCommands() {
+  return [
+    ...publicBotCommands(),
+    { command: "admin", description: "Админ-панель" },
+    { command: "grant", description: "Выдать подписку" },
+    { command: "orders", description: "Заказы" },
+    { command: "users", description: "Статистика" },
+    { command: "setpayment", description: "Сменить инструкцию" },
+    { command: "getpayment", description: "Показать инструкцию" },
+    { command: "setdownload", description: "Сменить ссылку" },
+    { command: "getdownload", description: "Показать ссылку" },
+    { command: "setprice", description: "Сменить цену" },
+    { command: "cancel", description: "Выйти из режима" },
+  ];
+}
+
 async function setupBotCommands() {
   try {
-    await api.setMyCommands([
-      { command: "start", description: "Открыть меню" },
-      { command: "prices", description: "Прайс" },
-      { command: "buy", description: "Купить подписку" },
-      { command: "mysub", description: "Статус подписки" },
-      { command: "register", description: "Создать логин" },
-      { command: "login", description: "Логин клиента" },
-      { command: "download", description: "Скачать" },
-      { command: "support", description: "Написать админу" },
-      { command: "admin", description: "Админ-панель" },
-    ]);
+    await api.setMyCommands(publicBotCommands());
+    for (const adminId of getAdminTelegramIds()) {
+      await api.setMyCommands(adminBotCommands(), {
+        scope: {
+          type: "chat",
+          chat_id: adminId,
+        },
+      });
+    }
   } catch (error) {
     console.error("Failed to set bot commands:", error.message);
   }
