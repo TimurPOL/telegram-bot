@@ -144,25 +144,34 @@ async function syncUserRecord(telegramId) {
   }
 
   const entitlement = db.getUserEntitlementByTelegramId(telegramId);
+  const payload = {
+    telegram_id: user.telegram_id,
+    username: user.username,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    is_admin: Boolean(user.is_admin),
+    client_login: user.client_login,
+    client_password: user.client_password,
+    has_access: entitlement.has_access,
+    plan_code: entitlement.plan_code,
+    expires_at: entitlement.expires_at,
+    is_lifetime: entitlement.is_lifetime,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
 
-  try {
-    await supabaseSync.upsertUser({
-      telegram_id: user.telegram_id,
-      username: user.username,
-      first_name: user.first_name,
-      last_name: user.last_name,
-      is_admin: Boolean(user.is_admin),
-      client_login: user.client_login,
-      client_password: user.client_password,
-      has_access: entitlement.has_access,
-      plan_code: entitlement.plan_code,
-      expires_at: entitlement.expires_at,
-      is_lifetime: entitlement.is_lifetime,
-      created_at: user.created_at,
-      updated_at: user.updated_at,
-    });
-  } catch (error) {
-    console.error("Supabase user sync failed:", error.message);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await supabaseSync.upsertUser(payload);
+      return;
+    } catch (error) {
+      if (attempt === 3) {
+        console.error("Supabase user sync failed:", error.message);
+        return;
+      }
+
+      await sleep(500);
+    }
   }
 }
 
