@@ -1,0 +1,10 @@
+{
+  "name": "telegram-subscription-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot with subscriptions, payments workflow and admin tools",
+  "private": true,
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/config.js && node --check src/db.js && node --check src/keyboards.js && node --check src/supabase.js && node --check src/telegram.js && node --check src/utils.js"
+  }
+}
