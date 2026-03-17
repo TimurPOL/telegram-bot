@@ -1,6 +1,5 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const crypto = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
 
 const { addDays, nowIso } = require("./utils");
@@ -230,46 +229,55 @@ class BotDatabase {
       .get(enabled ? 1 : 0, nowIso(), telegramId);
   }
 
-  ensureUserCredentials(telegramId) {
+  setUserCredentials(telegramId, clientLogin, clientPassword) {
     const user = this.getUserByTelegramId(telegramId);
     if (!user) {
       throw new Error("User not found");
     }
 
-    if (user.client_login && user.client_password) {
-      return user;
+    const conflictingUser = this.db
+      .prepare("SELECT telegram_id FROM users WHERE client_login = ? AND telegram_id != ?")
+      .get(clientLogin, telegramId);
+    if (conflictingUser) {
+      const error = new Error("Client login already exists");
+      error.code = "CLIENT_LOGIN_TAKEN";
+      throw error;
     }
 
-    const clientLogin = user.client_login || `tg${user.telegram_id}`;
-    const clientPassword = user.client_password || crypto.randomBytes(8).toString("hex");
+    try {
+      return this.db
+        .prepare(`
+          UPDATE users
+          SET client_login = ?, client_password = ?, updated_at = ?
+          WHERE telegram_id = ?
+          RETURNING *
+        `)
+        .get(clientLogin, clientPassword, nowIso(), telegramId);
+    } catch (error) {
+      if (String(error.message).includes("UNIQUE constraint failed: users.client_login")) {
+        const duplicateError = new Error("Client login already exists");
+        duplicateError.code = "CLIENT_LOGIN_TAKEN";
+        throw duplicateError;
+      }
 
-    return this.db
-      .prepare(`
-        UPDATE users
-        SET client_login = ?, client_password = ?, updated_at = ?
-        WHERE telegram_id = ?
-        RETURNING *
-      `)
-      .get(clientLogin, clientPassword, nowIso(), telegramId);
+      throw error;
+    }
   }
 
-  resetUserCredentials(telegramId) {
+  clearUserCredentials(telegramId) {
     const user = this.getUserByTelegramId(telegramId);
     if (!user) {
       throw new Error("User not found");
     }
 
-    const clientLogin = user.client_login || `tg${user.telegram_id}`;
-    const clientPassword = crypto.randomBytes(8).toString("hex");
-
     return this.db
       .prepare(`
         UPDATE users
-        SET client_login = ?, client_password = ?, updated_at = ?
+        SET client_login = NULL, client_password = NULL, updated_at = ?
         WHERE telegram_id = ?
         RETURNING *
       `)
-      .get(clientLogin, clientPassword, nowIso(), telegramId);
+      .get(nowIso(), telegramId);
   }
 
   getAdminTelegramIds() {

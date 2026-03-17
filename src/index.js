@@ -183,6 +183,10 @@ function readyRegisterText(user) {
   return `Готовый register: register ${user.client_login} ${user.client_password}`;
 }
 
+function hasClientCredentials(user) {
+  return Boolean(user?.client_login && user?.client_password);
+}
+
 function credentialsText(user, entitlement) {
   return [
     "Данные для входа в клиент:",
@@ -204,21 +208,75 @@ function credentialsText(user, entitlement) {
 function registerPromptText() {
   return [
     "Аккаунт клиента еще не создан.",
-    "Напишите /register, чтобы создать логин и пароль.",
+    "Напишите /register, чтобы самому задать никнейм и пароль.",
   ].join("\n");
 }
 
-function ensureClientCredentials(telegramId) {
-  const user = db.getUserByTelegramId(telegramId);
-  if (!user) {
-    return null;
+function registerStartText(user) {
+  return [
+    hasClientCredentials(user)
+      ? "Текущие логин и пароль будут заменены."
+      : "Настроим аккаунт клиента вручную.",
+    "Отправьте никнейм одним сообщением.",
+    "Разрешены латинские буквы, цифры, _, -, .",
+    "Длина: от 3 до 24 символов.",
+    "/cancel - отмена",
+  ].join("\n");
+}
+
+function registerPasswordPromptText(clientLogin) {
+  return [
+    `Никнейм: ${clientLogin}`,
+    "Теперь отправьте пароль одним сообщением.",
+    "Длина: от 6 до 64 символов, без пробелов.",
+    "/cancel - отмена",
+  ].join("\n");
+}
+
+function normalizeCredentialInput(value) {
+  return String(value || "").trim();
+}
+
+function validateClientLogin(value) {
+  const clientLogin = normalizeCredentialInput(value);
+  if (clientLogin.length < 3 || clientLogin.length > 24) {
+    return {
+      value: null,
+      error: "Никнейм должен быть длиной от 3 до 24 символов.",
+    };
   }
 
-  if (user.client_login && user.client_password) {
-    return user;
+  if (!/^[A-Za-z0-9_.-]+$/.test(clientLogin)) {
+    return {
+      value: null,
+      error: "Никнейм может содержать только латинские буквы, цифры и символы _, -, .",
+    };
   }
 
-  return db.ensureUserCredentials(telegramId);
+  return { value: clientLogin, error: null };
+}
+
+function validateClientPassword(value) {
+  const clientPassword = normalizeCredentialInput(value);
+  if (clientPassword.length < 6 || clientPassword.length > 64) {
+    return {
+      value: null,
+      error: "Пароль должен быть длиной от 6 до 64 символов.",
+    };
+  }
+
+  if (/\s/.test(clientPassword)) {
+    return {
+      value: null,
+      error: "Пароль не должен содержать пробелы.",
+    };
+  }
+
+  return { value: clientPassword, error: null };
+}
+
+function isClientLoginTakenError(error) {
+  return error?.code === "CLIENT_LOGIN_TAKEN";
 }
 
 async function syncUserRecord(telegramId) {
@@ -270,7 +328,6 @@ async function syncAllUsersToSupabase() {
 
   let synced = 0;
   for (const user of db.getAllUsers()) {
-    ensureClientCredentials(user.telegram_id);
     await syncUserRecord(user.telegram_id);
     synced += 1;
   }
@@ -338,8 +395,8 @@ function helpText() {
     "/prices - показать прайс",
     "/buy - выбрать тариф",
     "/mysub - статус подписки",
-    "/register - создать логин и пароль клиента",
-    "/login - показать логин клиента",
+    "/register - задать свой логин и пароль",
+    "/login - показать логин и пароль клиента",
     "/download - получить ссылку на скачивание",
     "/support - написать администратору",
   ].join("\n");
@@ -355,7 +412,7 @@ function adminHelpText() {
     "/setpayment <текст> - изменить инструкцию по оплате",
     "/getpayment - показать текущую инструкцию по оплате",
     "/grant <telegram_id> <7d|30d|90d|lifetime> - выдать подписку вручную",
-    "/resetlogin <telegram_id> - пересоздать логин и пароль пользователя",
+    "/resetlogin <telegram_id> - сбросить логин и пароль пользователя",
     "/say <telegram_id> <текст> - отправить сообщение от имени бота",
     "/broadcast <текст> - рассылка всем пользователям",
     "/orders - список заказов, ожидающих одобрения",
@@ -441,8 +498,8 @@ async function showSubscription(chatId, telegramId, messageId = null) {
 }
 
 async function showLogin(chatId, telegramId, messageId = null) {
-  let user = ensureClientCredentials(telegramId);
-  if (!user) {
+  const user = db.getUserByTelegramId(telegramId);
+  if (!hasClientCredentials(user)) {
     await upsertPanelMessage(chatId, messageId, registerPromptText(), {
       reply_markup: registerKeyboard(),
     });
@@ -450,22 +507,34 @@ async function showLogin(chatId, telegramId, messageId = null) {
   }
 
   const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  await syncUserRecord(telegramId);
   await upsertPanelMessage(chatId, messageId, credentialsText(user, entitlement), {
     reply_markup: subscriptionKeyboard(entitlement.has_access),
   });
 }
 
 async function showRegister(chatId, telegramId, messageId = null) {
-  const user = db.ensureUserCredentials(telegramId);
+  const user = db.getUserByTelegramId(telegramId);
+  setSession(telegramId, { mode: "awaiting_client_login" });
+  await upsertPanelMessage(chatId, messageId, registerStartText(user));
+}
+
+async function sendCredentialsOrRegisterPrompt(chatId, telegramId) {
+  const user = db.getUserByTelegramId(telegramId);
   const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  await syncUserRecord(telegramId);
-  await upsertPanelMessage(
+
+  if (hasClientCredentials(user)) {
+    await api.sendMessage(chatId, credentialsText(user, entitlement));
+    return;
+  }
+
+  await api.sendMessage(
     chatId,
-    messageId,
-    [`Аккаунт клиента готов.`, "", credentialsText(user, entitlement)].join("\n"),
+    [
+      "Логин и пароль еще не настроены.",
+      "Напишите /register и задайте свой никнейм и пароль вручную.",
+    ].join("\n"),
     {
-      reply_markup: subscriptionKeyboard(entitlement.has_access),
+      reply_markup: registerKeyboard(),
     },
   );
 }
@@ -741,7 +810,6 @@ async function approveOrder(orderId, adminTelegramId) {
     sourceOrderId: orderId,
   });
   db.setChatEnabled(order.telegram_id, true);
-  const targetUser = db.ensureUserCredentials(order.telegram_id);
   await syncUserRecord(order.telegram_id);
 
   await api.sendMessage(
@@ -766,10 +834,7 @@ async function approveOrder(orderId, adminTelegramId) {
     });
   }
 
-  await api.sendMessage(
-    order.telegram_id,
-    credentialsText(targetUser, db.getUserEntitlementByTelegramId(order.telegram_id)),
-  );
+  await sendCredentialsOrRegisterPrompt(order.telegram_id, order.telegram_id);
 }
 
 async function rejectOrder(orderId) {
@@ -894,7 +959,6 @@ async function handleAdminCommand(message, currentUser) {
         issuedByTelegramId: currentUser.telegram_id,
       });
       db.setChatEnabled(targetId, true);
-      const targetUser = db.ensureUserCredentials(targetId);
       await syncUserRecord(targetId);
       await api.sendMessage(chatId, "Подписка выдана.");
       await api.sendMessage(
@@ -910,10 +974,7 @@ async function handleAdminCommand(message, currentUser) {
           reply_markup: supportKeyboard(),
         },
       );
-      await api.sendMessage(
-        targetId,
-        credentialsText(targetUser, db.getUserEntitlementByTelegramId(targetId)),
-      );
+      await sendCredentialsOrRegisterPrompt(targetId, targetId);
     } catch (error) {
       await api.sendMessage(chatId, `Ошибка: ${error.message}`);
     }
@@ -928,20 +989,24 @@ async function handleAdminCommand(message, currentUser) {
     }
 
     try {
-      const targetUser = db.resetUserCredentials(targetId);
+      db.clearUserCredentials(targetId);
       await syncUserRecord(targetId);
       await api.sendMessage(
         chatId,
         [
-          "Логин обновлен.",
-          `Логин: ${targetUser.client_login}`,
-          `Пароль: ${targetUser.client_password}`,
-          readyRegisterText(targetUser),
+          "Логин и пароль сброшены.",
+          "Пользователь должен заново пройти /register и сам задать новые данные.",
         ].join("\n"),
       );
       await api.sendMessage(
         targetId,
-        credentialsText(targetUser, db.getUserEntitlementByTelegramId(targetId)),
+        [
+          "Администратор сбросил ваш логин и пароль.",
+          "Напишите /register и задайте новый никнейм и пароль вручную.",
+        ].join("\n"),
+        {
+          reply_markup: registerKeyboard(),
+        },
       );
     } catch (error) {
       await api.sendMessage(chatId, `Ошибка: ${error.message}`);
@@ -1046,6 +1111,10 @@ async function handleUserCommand(message, currentUser) {
     case "/help":
       await showHelp(chatId, currentUser.telegram_id);
       return true;
+    case "/cancel":
+      clearSession(currentUser.telegram_id);
+      await api.sendMessage(chatId, "Текущий режим отменен.");
+      return true;
     default:
       return false;
   }
@@ -1056,8 +1125,7 @@ async function handleTextMessage(message) {
     return;
   }
 
-  let currentUser = db.upsertUser(message.from, shouldGrantAdmin(message.from.id));
-  currentUser = ensureClientCredentials(currentUser.telegram_id) || currentUser;
+  const currentUser = db.upsertUser(message.from, shouldGrantAdmin(message.from.id));
   await syncUserRecord(currentUser.telegram_id);
   const chatId = message.chat.id;
   const session = getSession(currentUser.telegram_id);
@@ -1085,6 +1153,50 @@ async function handleTextMessage(message) {
     if (handledUser) {
       return;
     }
+  }
+
+  if (session?.mode === "awaiting_client_login") {
+    const { value: clientLogin, error } = validateClientLogin(messageText);
+    if (error) {
+      await api.sendMessage(chatId, `${error}\n\n${registerStartText(currentUser)}`);
+      return;
+    }
+
+    setSession(currentUser.telegram_id, {
+      mode: "awaiting_client_password",
+      clientLogin,
+    });
+    await api.sendMessage(chatId, registerPasswordPromptText(clientLogin));
+    return;
+  }
+
+  if (session?.mode === "awaiting_client_password") {
+    const { value: clientPassword, error } = validateClientPassword(messageText);
+    if (error) {
+      await api.sendMessage(chatId, `${error}\n\n${registerPasswordPromptText(session.clientLogin)}`);
+      return;
+    }
+
+    try {
+      db.setUserCredentials(currentUser.telegram_id, session.clientLogin, clientPassword);
+    } catch (saveError) {
+      if (isClientLoginTakenError(saveError)) {
+        setSession(currentUser.telegram_id, { mode: "awaiting_client_login" });
+        await api.sendMessage(
+          chatId,
+          ["Этот никнейм уже занят.", "", registerStartText(currentUser)].join("\n"),
+        );
+        return;
+      }
+
+      throw saveError;
+    }
+
+    clearSession(currentUser.telegram_id);
+    await syncUserRecord(currentUser.telegram_id);
+    await api.sendMessage(chatId, "Логин и пароль сохранены.");
+    await showLogin(chatId, currentUser.telegram_id);
+    return;
   }
 
   if (isAdmin(currentUser.telegram_id) && session?.mode === "awaiting_broadcast") {
@@ -1194,8 +1306,7 @@ async function handleTextMessage(message) {
 async function handleCallbackQuery(callbackQuery) {
   const from = callbackQuery.from;
   const data = callbackQuery.data || "";
-  let currentUser = db.upsertUser(from, shouldGrantAdmin(from.id));
-  currentUser = ensureClientCredentials(currentUser.telegram_id) || currentUser;
+  const currentUser = db.upsertUser(from, shouldGrantAdmin(from.id));
   await syncUserRecord(currentUser.telegram_id);
   const message = callbackQuery.message;
   const chatId = message?.chat?.id;
