@@ -166,6 +166,20 @@ async function syncUserRecord(telegramId) {
   }
 }
 
+async function syncAllUsersToSupabase() {
+  if (!supabaseSync.enabled) {
+    return;
+  }
+
+  let synced = 0;
+  for (const user of db.getAllUsers()) {
+    await syncUserRecord(user.telegram_id);
+    synced += 1;
+  }
+
+  console.log(`Supabase user backfill completed: ${synced}`);
+}
+
 async function syncSettingRecord(key) {
   if (!supabaseSync.enabled) {
     return;
@@ -1155,6 +1169,7 @@ async function startPolling() {
 
 async function main() {
   await setupBotCommands();
+  await syncAllUsersToSupabase();
   await pullSettingFromSupabase("download_url");
   await pullSettingFromSupabase("payment_text");
   await syncSettingRecord("download_url");
