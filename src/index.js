@@ -1678,6 +1678,12 @@ async function startPolling() {
 
 async function main() {
   await setupBotCommands();
+
+  console.log(`Supabase Sync: ${supabaseSync.enabled ? "ENABLED" : "DISABLED"}`);
+  if (supabaseSync.enabled) {
+    console.log(`Supabase URL: ${config.supabase.url}`);
+  }
+
   await syncAllUsersToSupabase();
   await pullSettingFromSupabase("download_url");
   await pullSettingFromSupabase("payment_text");
