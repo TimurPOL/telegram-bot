@@ -3,15 +3,12 @@ const { BotDatabase } = require("./db");
 const { SupabaseSync } = require("./supabase");
 const {
   adminChatKeyboard,
-  adminOrderKeyboard,
   adminPanelKeyboard,
   backToMainKeyboard,
   downloadKeyboard,
   helpKeyboard,
   mainInlineKeyboard,
   mainKeyboard,
-  orderPaymentKeyboard,
-  plansKeyboard,
   registerKeyboard,
   subscriptionKeyboard,
   supportKeyboard,
@@ -21,10 +18,7 @@ const {
   commandArgs,
   escapeHtml,
   formatDateTime,
-  formatPrice,
   formatUserName,
-  normalizePlanCode,
-  planTitle,
   sleep,
 } = require("./utils");
 
@@ -96,24 +90,8 @@ function getUserChatContext(telegramId) {
     return null;
   }
 
-  const openOrder = db.getLatestOpenOrderByTelegramId(telegramId);
-  if (openOrder) {
-    return {
-      type: "order",
-      order: openOrder,
-    };
-  }
-
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  if (!entitlement.has_access) {
-    return {
-      type: "support",
-    };
-  }
-
   return {
-    type: "subscription",
-    entitlement,
+    type: "support",
   };
 }
 
@@ -126,23 +104,7 @@ function chatContextLines(chatContext) {
     return ["Чат: открыт"];
   }
 
-  if (chatContext.type === "order") {
-    return [
-      `Заказ: <code>${escapeHtml(chatContext.order.public_id)}</code>`,
-      `Тариф: ${escapeHtml(planTitle(chatContext.order.plan_code))}`,
-      `Статус заказа: ${escapeHtml(chatContext.order.status)}`,
-    ];
-  }
-
-  if (chatContext.entitlement.is_lifetime) {
-    return ["Подписка: активна навсегда"];
-  }
-
-  if (chatContext.entitlement.expires_at) {
-    return [`Подписка активна до: ${escapeHtml(formatDateTime(chatContext.entitlement.expires_at))} UTC`];
-  }
-
-  return ["Подписка: активна"];
+  return [];
 }
 
 async function upsertPanelMessage(chatId, messageId, text, options = {}) {
@@ -159,10 +121,6 @@ async function upsertPanelMessage(chatId, messageId, text, options = {}) {
   }
 
   await api.sendMessage(chatId, text, options);
-}
-
-function planText(plan) {
-  return `${plan.title} - ${formatPrice(plan.price, plan.currency)}`;
 }
 
 function mainPanelText(adminFlag) {
@@ -187,19 +145,14 @@ function hasClientCredentials(user) {
   return Boolean(user?.client_login && user?.client_password);
 }
 
-function credentialsText(user, entitlement) {
+function credentialsText(user) {
   return [
     "Данные для входа в клиент:",
     `Логин: ${user.client_login || "-"}`,
     `Пароль: ${user.client_password || "-"}`,
     readyRegisterText(user),
     "",
-    `Статус доступа: ${entitlement.has_access ? "активен" : "не активен"}`,
-    entitlement.is_lifetime
-      ? "Подписка: навсегда"
-      : entitlement.expires_at
-        ? `Подписка до: ${formatDateTime(entitlement.expires_at)} UTC`
-        : "Подписка пока не активна",
+    `Статус регистрации: ${hasClientCredentials(user) ? "завершена" : "не завершена"}`,
   ]
     .filter((line) => line !== null)
     .join("\n");
@@ -289,7 +242,6 @@ async function syncUserRecord(telegramId) {
     return;
   }
 
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
   const payload = {
     telegram_id: user.telegram_id,
     username: user.username,
@@ -298,10 +250,7 @@ async function syncUserRecord(telegramId) {
     is_admin: isAdmin(user.telegram_id),
     client_login: user.client_login,
     client_password: user.client_password,
-    has_access: entitlement.has_access,
-    plan_code: entitlement.plan_code,
-    expires_at: entitlement.expires_at,
-    is_lifetime: entitlement.is_lifetime,
+    has_access: true, // Всегда есть доступ если зареган (упрощаем для синхронизации)
     created_at: user.created_at,
     updated_at: user.updated_at,
   };
@@ -368,33 +317,10 @@ async function pullSettingFromSupabase(key) {
   }
 }
 
-function pricesText() {
-  const lines = ["Доступные тарифы:"];
-  for (const plan of db.getPlans()) {
-    lines.push(`- ${planText(plan)}`);
-  }
-  return lines.join("\n");
-}
-
-function subscriptionText(entitlement) {
-  if (!entitlement.has_access) {
-    return "Подписка не активна.";
-  }
-
-  if (entitlement.is_lifetime) {
-    return "Подписка активна: навсегда.";
-  }
-
-  return `Подписка активна до ${formatDateTime(entitlement.expires_at)} UTC.`;
-}
-
 function helpText() {
   return [
     "Команды:",
     "/start - главное меню",
-    "/prices - показать прайс",
-    "/buy - выбрать тариф",
-    "/mysub - статус подписки",
     "/register - задать свой логин и пароль",
     "/login - показать логин и пароль клиента",
     "/download - получить ссылку на скачивание",
@@ -406,52 +332,14 @@ function adminHelpText() {
   return [
     "Админ-команды:",
     "/admin - открыть админ-панель",
-    "/setprice <7d|30d|90d|lifetime> <цена> - изменить цену",
     "/setdownload <url> - изменить ссылку на скачивание без перезапуска",
     "/getdownload - показать текущую ссылку на скачивание",
-    "/setpayment <текст> - изменить инструкцию по оплате",
-    "/getpayment - показать текущую инструкцию по оплате",
-    "/grant <telegram_id> <7d|30d|90d|lifetime> - выдать подписку вручную",
     "/resetlogin <telegram_id> - сбросить логин и пароль пользователя",
     "/say <telegram_id> <текст> - отправить сообщение от имени бота",
     "/broadcast <текст> - рассылка всем пользователям",
-    "/orders - список заказов, ожидающих одобрения",
     "/users - статистика",
     "/closechat <telegram_id> - закрыть чат с пользователем",
     "/cancel - выйти из режима ответа или рассылки",
-  ].join("\n");
-}
-
-function formatOrderForAdmin(order) {
-  return [
-    "<b>Новый запрос на оплату</b>",
-    `Заказ: <code>${escapeHtml(order.public_id)}</code>`,
-    `Пользователь: <b>${escapeHtml(
-      formatUserName({
-        telegram_id: order.telegram_id,
-        username: order.username,
-        first_name: order.first_name,
-        last_name: order.last_name,
-      }),
-    )}</b>`,
-    `Telegram ID: <code>${order.telegram_id}</code>`,
-    `Тариф: ${escapeHtml(planTitle(order.plan_code))}`,
-    `Сумма: ${escapeHtml(formatPrice(order.amount, order.currency))}`,
-    `Статус: ${escapeHtml(order.status)}`,
-  ].join("\n");
-}
-
-function formatOrderForUser(order) {
-  const paymentText = db.getSetting("payment_text") || "Инструкция по оплате пока не заполнена.";
-  return [
-    `Заказ создан: <code>${escapeHtml(order.public_id)}</code>`,
-    `Тариф: ${escapeHtml(planTitle(order.plan_code))}`,
-    `Сумма: ${escapeHtml(formatPrice(order.amount, order.currency))}`,
-    "",
-    "Инструкция по оплате:",
-    escapeHtml(paymentText),
-    "",
-    'После оплаты нажмите "Я оплатил".',
   ].join("\n");
 }
 
@@ -462,38 +350,12 @@ async function sendMainMenu(chatId, adminFlag) {
 }
 
 async function sendContextualMainMenu(chatId, telegramId) {
-  if (getUserChatContext(telegramId)) {
-    await api.sendMessage(chatId, "Чат с администратором активен. Можно писать сюда и пользоваться кнопками.", {
-      reply_markup: mainKeyboard(isAdmin(telegramId)),
-    });
-    return;
-  }
-
   await sendMainMenu(chatId, isAdmin(telegramId));
 }
 
 async function showMainPanel(chatId, telegramId, messageId = null) {
   await upsertPanelMessage(chatId, messageId, mainPanelText(isAdmin(telegramId)), {
     reply_markup: mainInlineKeyboard(isAdmin(telegramId)),
-  });
-}
-
-async function showPrices(chatId, telegramId, messageId = null) {
-  await upsertPanelMessage(chatId, messageId, pricesText(), {
-    reply_markup: plansKeyboard(db.getPlans()),
-  });
-}
-
-async function showBuy(chatId, telegramId, messageId = null) {
-  await upsertPanelMessage(chatId, messageId, "Выберите тариф:", {
-    reply_markup: plansKeyboard(db.getPlans()),
-  });
-}
-
-async function showSubscription(chatId, telegramId, messageId = null) {
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  await upsertPanelMessage(chatId, messageId, subscriptionText(entitlement), {
-    reply_markup: subscriptionKeyboard(entitlement.has_access),
   });
 }
 
@@ -506,9 +368,8 @@ async function showLogin(chatId, telegramId, messageId = null) {
     return;
   }
 
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  await upsertPanelMessage(chatId, messageId, credentialsText(user, entitlement), {
-    reply_markup: subscriptionKeyboard(entitlement.has_access),
+  await upsertPanelMessage(chatId, messageId, credentialsText(user), {
+    reply_markup: subscriptionKeyboard(true),
   });
 }
 
@@ -532,10 +393,9 @@ async function showRegister(chatId, telegramId, messageId = null) {
 
 async function sendCredentialsOrRegisterPrompt(chatId, telegramId) {
   const user = db.getUserByTelegramId(telegramId);
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
 
   if (hasClientCredentials(user)) {
-    await api.sendMessage(chatId, credentialsText(user, entitlement));
+    await api.sendMessage(chatId, credentialsText(user));
     return;
   }
 
@@ -552,14 +412,14 @@ async function sendCredentialsOrRegisterPrompt(chatId, telegramId) {
 }
 
 async function showDownload(chatId, telegramId, messageId = null) {
-  const entitlement = db.getUserEntitlementByTelegramId(telegramId);
-  if (!entitlement.has_access) {
+  const user = db.getUserByTelegramId(telegramId);
+  if (!hasClientCredentials(user)) {
     await upsertPanelMessage(
       chatId,
       messageId,
-      "Скачивание доступно только при активной подписке.",
+      "Скачивание доступно только после регистрации.",
       {
-        reply_markup: subscriptionKeyboard(false),
+        reply_markup: registerKeyboard(),
       },
     );
     return;
@@ -615,8 +475,6 @@ function adminPanelText() {
   return [
     "Админ-панель",
     `Пользователей: ${stats.users}`,
-    `Активных подписок: ${stats.activeSubscriptions}`,
-    `Ожидающих заказов: ${stats.pendingOrders}`,
     "",
     "Для быстрых действий используйте кнопки ниже.",
   ].join("\n");
@@ -650,8 +508,6 @@ async function showAdminStats(chatId, telegramId, messageId = null) {
     [
       "Статистика",
       `Пользователей: ${stats.users}`,
-      `Активных подписок: ${stats.activeSubscriptions}`,
-      `Ожидающих заказов: ${stats.pendingOrders}`,
     ].join("\n"),
     {
       reply_markup: adminPanelKeyboard(),
@@ -712,36 +568,6 @@ async function notifyTextAdminsAboutOpenedChat(telegramId, title) {
   );
 }
 
-async function notifyAdminsAboutNewOrder(orderId) {
-  const order = db.getOrderById(orderId);
-  if (!order) {
-    return;
-  }
-
-  await sendToTextAdmins(
-    [
-      "<b>Пользователь выбрал тариф</b>",
-      `Заказ: <code>${escapeHtml(order.public_id)}</code>`,
-      `Пользователь: <b>${escapeHtml(
-        formatUserName({
-          telegram_id: order.telegram_id,
-          username: order.username,
-          first_name: order.first_name,
-          last_name: order.last_name,
-        }),
-      )}</b>`,
-      `Telegram ID: <code>${order.telegram_id}</code>`,
-      `Тариф: ${escapeHtml(planTitle(order.plan_code))}`,
-      `Сумма: ${escapeHtml(formatPrice(order.amount, order.currency))}`,
-      "Чат с пользователем уже открыт.",
-    ].join("\n"),
-    {
-      parse_mode: "HTML",
-      reply_markup: adminChatKeyboard(order.telegram_id),
-    },
-  );
-}
-
 async function relayUserChatMessage(currentUser, message) {
   const messageText = message.text || "";
   const chatContext = getUserChatContext(currentUser.telegram_id);
@@ -752,7 +578,7 @@ async function relayUserChatMessage(currentUser, message) {
   db.saveSupportMessage(currentUser.id, message.message_id, messageText);
   await sendToTextAdmins(
     [
-      chatContext.type === "order" ? "<b>Чат по покупке</b>" : "<b>Чат с пользователем</b>",
+      "<b>Чат с пользователем</b>",
       `От: <b>${escapeHtml(formatUserName(currentUser))}</b>`,
       `Telegram ID: <code>${currentUser.telegram_id}</code>`,
       ...chatContextLines(chatContext),
@@ -765,102 +591,6 @@ async function relayUserChatMessage(currentUser, message) {
     },
   );
   return true;
-}
-
-async function createOrderAndPrompt(chatId, telegramUser, planCode) {
-  const user = db.getUserByTelegramId(telegramUser.id);
-  const plan = db.getPlan(planCode);
-  if (!user || !plan) {
-    await api.sendMessage(chatId, "Не удалось создать заказ.");
-    return;
-  }
-
-  await pullSettingFromSupabase("payment_text");
-  const order = db.createOrder(user.id, plan);
-  db.setChatEnabled(telegramUser.id, true);
-  await api.sendMessage(chatId, formatOrderForUser(order), {
-    parse_mode: "HTML",
-    reply_markup: orderPaymentKeyboard(order.id),
-  });
-  await api.sendMessage(
-    chatId,
-    "Чат с администратором открыт. Можете сразу написать сюда сообщение по оплате или по заказу.",
-    {
-      reply_markup: supportKeyboard(),
-    },
-  );
-  await notifyAdminsAboutNewOrder(order.id);
-}
-
-async function notifyAdminsAboutPayment(orderId) {
-  const order = db.getOrderById(orderId);
-  if (!order) {
-    return;
-  }
-
-  await sendToAdmins(formatOrderForAdmin(order), {
-    parse_mode: "HTML",
-    reply_markup: adminOrderKeyboard(order.id, order.telegram_id),
-  });
-}
-
-async function approveOrder(orderId, adminTelegramId) {
-  const order = db.getOrderById(orderId);
-  if (!order) {
-    throw new Error("Заказ не найден");
-  }
-
-  if (order.status !== "waiting_approval") {
-    throw new Error("Этот заказ уже обработан");
-  }
-
-  db.markOrderPaid(orderId);
-  db.grantSubscription({
-    telegramId: order.telegram_id,
-    planCode: order.plan_code,
-    issuedByTelegramId: adminTelegramId,
-    sourceOrderId: orderId,
-  });
-  db.setChatEnabled(order.telegram_id, true);
-  await syncUserRecord(order.telegram_id);
-
-  await api.sendMessage(
-    order.telegram_id,
-    `Оплата подтверждена. ${subscriptionText(db.getUserEntitlementByTelegramId(order.telegram_id))}`,
-    {
-      reply_markup: mainKeyboard(isAdmin(order.telegram_id)),
-    },
-  );
-  await api.sendMessage(
-    order.telegram_id,
-    "Чат с администратором активен. Просто пишите сюда, и сообщение уйдёт админу через бота.",
-    {
-      reply_markup: supportKeyboard(),
-    },
-  );
-
-  const url = db.getSetting("download_url");
-  if (url) {
-    await api.sendMessage(order.telegram_id, "Ссылка на скачивание:", {
-      reply_markup: downloadKeyboard(url),
-    });
-  }
-
-  await sendCredentialsOrRegisterPrompt(order.telegram_id, order.telegram_id);
-}
-
-async function rejectOrder(orderId) {
-  const order = db.getOrderById(orderId);
-  if (!order) {
-    throw new Error("Заказ не найден");
-  }
-
-  if (order.status !== "waiting_approval") {
-    throw new Error("Этот заказ уже обработан");
-  }
-
-  db.rejectOrder(orderId);
-  await api.sendMessage(order.telegram_id, "Оплата отклонена. Свяжитесь с администратором.");
 }
 
 async function handleTextAdminCommand(message, currentUser) {
@@ -902,24 +632,6 @@ async function handleAdminCommand(message, currentUser) {
     return true;
   }
 
-  if (command === "/setprice") {
-    const planCode = normalizePlanCode(rest[0]);
-    const amount = Number(rest[1]);
-    if (!planCode || !Number.isFinite(amount) || amount <= 0) {
-      await api.sendMessage(chatId, "Использование: /setprice <7d|30d|90d|lifetime> <цена>");
-      return true;
-    }
-
-    const plan = db.updatePlanPrice(planCode, Math.round(amount));
-    if (!plan) {
-      await api.sendMessage(chatId, "Тариф не найден.");
-      return true;
-    }
-
-    await api.sendMessage(chatId, `Цена обновлена: ${planText(plan)}`);
-    return true;
-  }
-
   if (command === "/setdownload") {
     if (!rawArgs) {
       await api.sendMessage(chatId, "Использование: /setdownload <url>");
@@ -935,61 +647,6 @@ async function handleAdminCommand(message, currentUser) {
     await pullSettingFromSupabase("download_url");
     const currentUrl = db.getSetting("download_url") || "(пусто)";
     await api.sendMessage(chatId, `Текущая ссылка:\n${currentUrl}`);
-    return true;
-  }
-
-  if (command === "/setpayment") {
-    if (!rawArgs) {
-      await api.sendMessage(chatId, "Использование: /setpayment <текст>");
-      return true;
-    }
-    db.setSetting("payment_text", rawArgs);
-    await syncSettingRecord("payment_text");
-    await api.sendMessage(chatId, "Инструкция по оплате обновлена.");
-    return true;
-  }
-
-  if (command === "/getpayment") {
-    await pullSettingFromSupabase("payment_text");
-    const currentPaymentText = db.getSetting("payment_text") || "(РїСѓСЃС‚Рѕ)";
-    await api.sendMessage(chatId, `РўРµРєСѓС‰Р°СЏ РёРЅСЃС‚СЂСѓРєС†РёСЏ РїРѕ РѕРїР»Р°С‚Рµ:\n${currentPaymentText}`);
-    return true;
-  }
-
-  if (command === "/grant") {
-    const targetId = Number(rest[0]);
-    const planCode = normalizePlanCode(rest[1]);
-    if (!Number.isInteger(targetId) || !planCode) {
-      await api.sendMessage(chatId, "Использование: /grant <telegram_id> <7d|30d|90d|lifetime>");
-      return true;
-    }
-
-    try {
-      db.grantSubscription({
-        telegramId: targetId,
-        planCode,
-        issuedByTelegramId: currentUser.telegram_id,
-      });
-      db.setChatEnabled(targetId, true);
-      await syncUserRecord(targetId);
-      await api.sendMessage(chatId, "Подписка выдана.");
-      await api.sendMessage(
-        targetId,
-        `Вам выдана ${planTitle(planCode).toLowerCase()}. ${subscriptionText(
-          db.getUserEntitlementByTelegramId(targetId),
-        )}`,
-      );
-      await api.sendMessage(
-        targetId,
-        "Чат с администратором активен. Просто пишите сюда, и сообщение уйдёт админу через бота.",
-        {
-          reply_markup: supportKeyboard(),
-        },
-      );
-      await sendCredentialsOrRegisterPrompt(targetId, targetId);
-    } catch (error) {
-      await api.sendMessage(chatId, `Ошибка: ${error.message}`);
-    }
     return true;
   }
 
@@ -1060,22 +717,6 @@ async function handleAdminCommand(message, currentUser) {
     return true;
   }
 
-  if (command === "/orders") {
-    const orders = db.getWaitingOrders();
-    if (orders.length === 0) {
-      await api.sendMessage(chatId, "Нет заказов, ожидающих одобрения.");
-      return true;
-    }
-
-    for (const order of orders) {
-      await api.sendMessage(chatId, formatOrderForAdmin(order), {
-        parse_mode: "HTML",
-        reply_markup: adminOrderKeyboard(order.id, order.telegram_id),
-      });
-    }
-    return true;
-  }
-
   if (command === "/users") {
     await showAdminStats(chatId, currentUser.telegram_id);
     return true;
@@ -1098,15 +739,6 @@ async function handleUserCommand(message, currentUser) {
     case "/start":
       await sendContextualMainMenu(chatId, currentUser.telegram_id);
       await showMainPanel(chatId, currentUser.telegram_id);
-      return true;
-    case "/prices":
-      await showPrices(chatId, currentUser.telegram_id);
-      return true;
-    case "/buy":
-      await showBuy(chatId, currentUser.telegram_id);
-      return true;
-    case "/mysub":
-      await showSubscription(chatId, currentUser.telegram_id);
       return true;
     case "/register":
       await showRegister(chatId, currentUser.telegram_id);
@@ -1190,7 +822,7 @@ async function handleTextMessage(message) {
     }
 
     try {
-      db.setUserCredentials(currentUser.telegram_id, session.clientLogin, clientPassword);
+      db.setUserCredentials(currentUser.telegram_id, clientLogin, clientPassword);
     } catch (saveError) {
       if (isClientLoginTakenError(saveError)) {
         setSession(currentUser.telegram_id, { mode: "awaiting_client_login" });
@@ -1279,15 +911,6 @@ async function handleTextMessage(message) {
   }
 
   switch (messageText) {
-    case "Прайс":
-      await showPrices(chatId, currentUser.telegram_id);
-      return;
-    case "Купить":
-      await showBuy(chatId, currentUser.telegram_id);
-      return;
-    case "Моя подписка":
-      await showSubscription(chatId, currentUser.telegram_id);
-      return;
     case "Логин":
       await showLogin(chatId, currentUser.telegram_id);
       return;
@@ -1334,24 +957,6 @@ async function handleCallbackQuery(callbackQuery) {
         return;
       }
 
-      if (value === "prices") {
-        await showPrices(chatId, currentUser.telegram_id, messageId);
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Прайс" });
-        return;
-      }
-
-      if (value === "buy") {
-        await showBuy(chatId, currentUser.telegram_id, messageId);
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Выбор тарифа" });
-        return;
-      }
-
-      if (value === "mysub") {
-        await showSubscription(chatId, currentUser.telegram_id, messageId);
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Статус подписки" });
-        return;
-      }
-
       if (value === "login") {
         await showLogin(chatId, currentUser.telegram_id, messageId);
         await api.answerCallbackQuery(callbackQuery.id, { text: "Логин клиента" });
@@ -1360,7 +965,7 @@ async function handleCallbackQuery(callbackQuery) {
 
       if (value === "register") {
         await showRegister(chatId, currentUser.telegram_id, messageId);
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Р›РѕРіРёРЅ СЃРѕР·РґР°РЅ" });
+        await api.answerCallbackQuery(callbackQuery.id, { text: "Регистрация" });
         return;
       }
 
@@ -1381,96 +986,6 @@ async function handleCallbackQuery(callbackQuery) {
         await api.answerCallbackQuery(callbackQuery.id, { text: "Помощь" });
         return;
       }
-    }
-
-    if (action === "buy") {
-      await createOrderAndPrompt(chatId, from, value);
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ создан" });
-      return;
-    }
-
-    if (action === "order-paid") {
-      const orderId = Number(value);
-      const order = db.getOrderById(orderId);
-      if (!order || order.telegram_id !== currentUser.telegram_id) {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ не найден", show_alert: true });
-        return;
-      }
-      if (order.status !== "awaiting_payment") {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Этот заказ уже обработан", show_alert: true });
-        return;
-      }
-
-      db.flagOrderWaitingApproval(orderId);
-      await notifyAdminsAboutPayment(orderId);
-      await api.editMessageText(
-        chatId,
-        messageId,
-        `${formatOrderForUser(db.getOrderById(orderId))}\n\nСтатус: ожидает подтверждения администратора.`,
-        {
-          parse_mode: "HTML",
-        },
-      );
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Администратор получил запрос" });
-      return;
-    }
-
-    if (action === "order-cancel") {
-      const orderId = Number(value);
-      const order = db.getOrderById(orderId);
-      if (!order || order.telegram_id !== currentUser.telegram_id) {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ не найден", show_alert: true });
-        return;
-      }
-      if (order.status !== "awaiting_payment") {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ уже нельзя отменить", show_alert: true });
-        return;
-      }
-
-      db.cancelOrder(orderId);
-      await api.editMessageText(chatId, messageId, "Заказ отменен.", {
-        reply_markup: backToMainKeyboard(),
-      });
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ отменен" });
-      return;
-    }
-
-    if (action === "admin-approve") {
-      if (!isAdmin(currentUser.telegram_id)) {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Нет доступа", show_alert: true });
-        return;
-      }
-      await approveOrder(Number(value), currentUser.telegram_id);
-      await api.editMessageText(
-        chatId,
-        messageId,
-        `${formatOrderForAdmin(db.getOrderById(Number(value)))}\n\nСтатус: paid`,
-        {
-          parse_mode: "HTML",
-          reply_markup: adminPanelKeyboard(),
-        },
-      );
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Подписка выдана" });
-      return;
-    }
-
-    if (action === "admin-reject") {
-      if (!isAdmin(currentUser.telegram_id)) {
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Нет доступа", show_alert: true });
-        return;
-      }
-      await rejectOrder(Number(value));
-      await api.editMessageText(
-        chatId,
-        messageId,
-        `${formatOrderForAdmin(db.getOrderById(Number(value)))}\n\nСтатус: rejected`,
-        {
-          parse_mode: "HTML",
-          reply_markup: adminPanelKeyboard(),
-        },
-      );
-      await api.answerCallbackQuery(callbackQuery.id, { text: "Заказ отклонен" });
-      return;
     }
 
     if (action === "admin-reply") {
@@ -1533,22 +1048,6 @@ async function handleCallbackQuery(callbackQuery) {
         return;
       }
 
-      if (value === "list-orders") {
-        const orders = db.getWaitingOrders();
-        if (orders.length === 0) {
-          await api.sendMessage(currentUser.telegram_id, "Нет заказов, ожидающих одобрения.");
-        } else {
-          for (const order of orders) {
-            await api.sendMessage(currentUser.telegram_id, formatOrderForAdmin(order), {
-              parse_mode: "HTML",
-              reply_markup: adminOrderKeyboard(order.id, order.telegram_id),
-            });
-          }
-        }
-        await api.answerCallbackQuery(callbackQuery.id, { text: "Готово" });
-        return;
-      }
-
       if (value === "broadcast-mode") {
         setSession(currentUser.telegram_id, { mode: "awaiting_broadcast" });
         await api.sendMessage(
@@ -1598,9 +1097,6 @@ async function handleUpdate(update) {
 function publicBotCommands() {
   return [
     { command: "start", description: "Открыть меню" },
-    { command: "prices", description: "Прайс" },
-    { command: "buy", description: "Купить подписку" },
-    { command: "mysub", description: "Статус подписки" },
     { command: "register", description: "Создать логин" },
     { command: "login", description: "Логин клиента" },
     { command: "download", description: "Скачать" },
@@ -1612,14 +1108,8 @@ function adminBotCommands() {
   return [
     ...publicBotCommands(),
     { command: "admin", description: "Админ-панель" },
-    { command: "grant", description: "Выдать подписку" },
-    { command: "orders", description: "Заказы" },
-    { command: "users", description: "Статистика" },
-    { command: "setpayment", description: "Сменить инструкцию" },
-    { command: "getpayment", description: "Показать инструкцию" },
     { command: "setdownload", description: "Сменить ссылку" },
     { command: "getdownload", description: "Показать ссылку" },
-    { command: "setprice", description: "Сменить цену" },
     { command: "closechat", description: "Закрыть чат" },
     { command: "cancel", description: "Выйти из режима" },
   ];
@@ -1709,9 +1199,7 @@ async function main() {
 
   await syncAllUsersToSupabase();
   await pullSettingFromSupabase("download_url");
-  await pullSettingFromSupabase("payment_text");
   await syncSettingRecord("download_url");
-  await syncSettingRecord("payment_text");
   console.log("Bot started.");
   await startPolling();
 }

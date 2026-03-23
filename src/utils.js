@@ -12,13 +12,9 @@ function addDays(date, days) {
   return result;
 }
 
-function formatPrice(amount, currency) {
-  return `${amount} ${currency}`;
-}
-
 function formatDateTime(value) {
   if (!value) {
-    return "Навсегда";
+    return "Неизвестно";
   }
 
   const date = new Date(value);
@@ -50,49 +46,6 @@ function commandArgs(text) {
   };
 }
 
-function normalizePlanCode(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-
-  const aliases = {
-    "7": "7d",
-    "7d": "7d",
-    week: "7d",
-    "30": "30d",
-    "30d": "30d",
-    "30д": "30d",
-    month: "30d",
-    "90": "90d",
-    "90d": "90d",
-    "90д": "90d",
-    quarter: "90d",
-    lifetime: "lifetime",
-    forever: "lifetime",
-    eternal: "lifetime",
-    foreversub: "lifetime",
-    navsegda: "lifetime",
-    "навсегда": "lifetime",
-  };
-
-  return aliases[normalized] || null;
-}
-
-function planTitle(code) {
-  switch (code) {
-    case "7d":
-      return "Подписка на 7 дней";
-    case "30d":
-      return "Подписка на 30 дней";
-    case "90d":
-      return "Подписка на 90 дней";
-    case "lifetime":
-      return "Подписка навсегда";
-    default:
-      return code;
-  }
-}
-
 function formatUserName(user) {
   const parts = [user.first_name, user.last_name].filter(Boolean);
   if (parts.length > 0) {
@@ -109,11 +62,8 @@ module.exports = {
   commandArgs,
   escapeHtml,
   formatDateTime,
-  formatPrice,
   formatUserName,
-  normalizePlanCode,
   nowIso,
-  planTitle,
   sleep,
   toIsoDate,
 };

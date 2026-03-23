@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 
-const { addDays, nowIso } = require("./utils");
+const { nowIso } = require("./utils");
 
 class BotDatabase {
   constructor(dbPath, defaults) {
@@ -25,39 +25,7 @@ class BotDatabase {
         client_login TEXT,
         client_password TEXT,
         is_admin INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS plans (
-        code TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        duration_days INTEGER,
-        price INTEGER NOT NULL,
-        currency TEXT NOT NULL,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        updated_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS subscriptions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        plan_code TEXT NOT NULL REFERENCES plans(code),
-        starts_at TEXT NOT NULL,
-        expires_at TEXT,
-        issued_by_telegram_id INTEGER,
-        source_order_id INTEGER,
-        created_at TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        public_id TEXT NOT NULL UNIQUE,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        plan_code TEXT NOT NULL REFERENCES plans(code),
-        amount INTEGER NOT NULL,
-        currency TEXT NOT NULL,
-        status TEXT NOT NULL,
+        chat_enabled INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -78,7 +46,6 @@ class BotDatabase {
     `);
 
     this.migrate();
-
     this.seed();
   }
 
@@ -103,53 +70,7 @@ class BotDatabase {
   }
 
   seed() {
-    const now = nowIso();
-    const upsertPlan = this.db.prepare(`
-      INSERT INTO plans (code, title, duration_days, price, currency, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(code) DO UPDATE SET
-        title = excluded.title,
-        duration_days = excluded.duration_days,
-        price = COALESCE(plans.price, excluded.price),
-        currency = excluded.currency,
-        updated_at = excluded.updated_at
-    `);
-
-    upsertPlan.run(
-      "7d",
-      "Подписка на 7 дней",
-      7,
-      this.defaults.prices["7d"],
-      this.defaults.currency,
-      now,
-    );
-    upsertPlan.run(
-      "30d",
-      "Подписка на 30 дней",
-      30,
-      this.defaults.prices["30d"],
-      this.defaults.currency,
-      now,
-    );
-    upsertPlan.run(
-      "90d",
-      "Подписка на 90 дней",
-      90,
-      this.defaults.prices["90d"],
-      this.defaults.currency,
-      now,
-    );
-    upsertPlan.run(
-      "lifetime",
-      "Подписка навсегда",
-      null,
-      this.defaults.prices.lifetime,
-      this.defaults.currency,
-      now,
-    );
-
     this.setSettingIfMissing("download_url", this.defaults.downloadUrl);
-    this.setSettingIfMissing("payment_text", this.defaults.paymentText);
   }
 
   setSettingIfMissing(key, value) {
@@ -159,7 +80,7 @@ class BotDatabase {
         VALUES (?, ?, ?)
         ON CONFLICT(key) DO NOTHING
       `)
-      .run(key, value, nowIso());
+      .run(key, value || "", nowIso());
   }
 
   upsertUser(telegramUser, isAdmin) {
@@ -195,12 +116,6 @@ class BotDatabase {
         timestamp,
         timestamp,
       );
-  }
-
-  hasAnyAdmin() {
-    return (
-      this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE is_admin = 1").get().count > 0
-    );
   }
 
   getUserByTelegramId(telegramId) {
@@ -289,43 +204,7 @@ class BotDatabase {
 
   getStats() {
     const users = this.db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
-    const activeSubscriptions = this.db
-      .prepare(`
-        SELECT COUNT(DISTINCT user_id) AS count
-        FROM subscriptions
-        WHERE expires_at IS NULL OR expires_at > ?
-      `)
-      .get(nowIso()).count;
-    const pendingOrders = this.db
-      .prepare("SELECT COUNT(*) AS count FROM orders WHERE status = 'waiting_approval'")
-      .get().count;
-
-    return { users, activeSubscriptions, pendingOrders };
-  }
-
-  getPlans() {
-    return this.db
-      .prepare(`
-        SELECT * FROM plans
-        WHERE is_active = 1
-        ORDER BY CASE code WHEN '7d' THEN 1 WHEN '30d' THEN 2 WHEN '90d' THEN 3 ELSE 4 END
-      `)
-      .all();
-  }
-
-  getPlan(code) {
-    return this.db.prepare("SELECT * FROM plans WHERE code = ?").get(code);
-  }
-
-  updatePlanPrice(code, amount) {
-    return this.db
-      .prepare(`
-        UPDATE plans
-        SET price = ?, updated_at = ?
-        WHERE code = ?
-        RETURNING *
-      `)
-      .get(amount, nowIso(), code);
+    return { users };
   }
 
   getSetting(key) {
@@ -344,212 +223,6 @@ class BotDatabase {
       `)
       .run(key, value, nowIso());
     return value;
-  }
-
-  createOrder(userId, plan) {
-    const createdAt = nowIso();
-    const publicId = `ORD-${Date.now().toString(36).toUpperCase()}-${Math.floor(
-      Math.random() * 900 + 100,
-    )}`;
-
-    return this.db
-      .prepare(`
-        INSERT INTO orders (
-          public_id,
-          user_id,
-          plan_code,
-          amount,
-          currency,
-          status,
-          created_at,
-          updated_at
-        )
-        VALUES (?, ?, ?, ?, ?, 'awaiting_payment', ?, ?)
-        RETURNING *
-      `)
-      .get(publicId, userId, plan.code, plan.price, plan.currency, createdAt, createdAt);
-  }
-
-  updateOrderStatus(orderId, status) {
-    return this.db
-      .prepare(`
-        UPDATE orders
-        SET status = ?, updated_at = ?
-        WHERE id = ?
-        RETURNING *
-      `)
-      .get(status, nowIso(), orderId);
-  }
-
-  getOrderById(orderId) {
-    return this.db
-      .prepare(`
-        SELECT
-          orders.*,
-          users.telegram_id,
-          users.username,
-          users.first_name,
-          users.last_name
-        FROM orders
-        JOIN users ON users.id = orders.user_id
-        WHERE orders.id = ?
-      `)
-      .get(orderId);
-  }
-
-  getWaitingOrders() {
-    return this.db
-      .prepare(`
-        SELECT
-          orders.*,
-          users.telegram_id,
-          users.username,
-          users.first_name,
-          users.last_name
-        FROM orders
-        JOIN users ON users.id = orders.user_id
-        WHERE orders.status = 'waiting_approval'
-        ORDER BY orders.created_at ASC
-      `)
-      .all();
-  }
-
-  getLatestOpenOrderByTelegramId(telegramId) {
-    return this.db
-      .prepare(`
-        SELECT
-          orders.*,
-          users.telegram_id,
-          users.username,
-          users.first_name,
-          users.last_name
-        FROM orders
-        JOIN users ON users.id = orders.user_id
-        WHERE users.telegram_id = ?
-          AND orders.status IN ('awaiting_payment', 'waiting_approval')
-        ORDER BY orders.updated_at DESC, orders.id DESC
-        LIMIT 1
-      `)
-      .get(telegramId);
-  }
-
-  markOrderPaid(orderId) {
-    return this.updateOrderStatus(orderId, "paid");
-  }
-
-  rejectOrder(orderId) {
-    return this.updateOrderStatus(orderId, "rejected");
-  }
-
-  cancelOrder(orderId) {
-    return this.updateOrderStatus(orderId, "cancelled");
-  }
-
-  flagOrderWaitingApproval(orderId) {
-    return this.updateOrderStatus(orderId, "waiting_approval");
-  }
-
-  grantSubscription({ telegramId, planCode, issuedByTelegramId = null, sourceOrderId = null }) {
-    const user = this.getUserByTelegramId(telegramId);
-    const plan = this.getPlan(planCode);
-
-    if (!user) {
-      throw new Error("User not found");
-    }
-    if (!plan) {
-      throw new Error("Plan not found");
-    }
-
-    const entitlement = this.getUserEntitlementByUserId(user.id);
-    const now = new Date();
-    const startsAt = entitlement.expires_at
-      ? new Date(Math.max(now.getTime(), new Date(entitlement.expires_at).getTime()))
-      : now;
-    const expiresAt =
-      plan.duration_days == null ? null : addDays(startsAt, plan.duration_days).toISOString();
-
-    return this.db
-      .prepare(`
-        INSERT INTO subscriptions (
-          user_id,
-          plan_code,
-          starts_at,
-          expires_at,
-          issued_by_telegram_id,
-          source_order_id,
-          created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        RETURNING *
-      `)
-      .get(
-        user.id,
-        plan.code,
-        startsAt.toISOString(),
-        expiresAt,
-        issuedByTelegramId,
-        sourceOrderId,
-        nowIso(),
-      );
-  }
-
-  getUserEntitlementByTelegramId(telegramId) {
-    const user = this.getUserByTelegramId(telegramId);
-    if (!user) {
-      return {
-        has_access: false,
-        expires_at: null,
-        is_lifetime: false,
-        plan_code: null,
-      };
-    }
-
-    return this.getUserEntitlementByUserId(user.id);
-  }
-
-  getUserEntitlementByUserId(userId) {
-    const lifetime = this.db
-      .prepare(`
-        SELECT * FROM subscriptions
-        WHERE user_id = ? AND expires_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1
-      `)
-      .get(userId);
-
-    if (lifetime) {
-      return {
-        has_access: true,
-        expires_at: null,
-        is_lifetime: true,
-        plan_code: lifetime.plan_code,
-      };
-    }
-
-    const latest = this.db
-      .prepare(`
-        SELECT * FROM subscriptions
-        WHERE user_id = ? AND expires_at > ?
-        ORDER BY expires_at DESC
-        LIMIT 1
-      `)
-      .get(userId, nowIso());
-
-    if (!latest) {
-      return {
-        has_access: false,
-        expires_at: null,
-        is_lifetime: false,
-        plan_code: null,
-      };
-    }
-
-    return {
-      has_access: true,
-      expires_at: latest.expires_at,
-      is_lifetime: false,
-      plan_code: latest.plan_code,
-    };
   }
 
   saveSupportMessage(userId, telegramMessageId, messageText) {

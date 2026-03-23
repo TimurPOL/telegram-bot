@@ -91,16 +91,6 @@ const config = {
   },
   defaults: {
     downloadUrl: normalizeEnvValue(process.env.DEFAULT_DOWNLOAD_URL) || "",
-    paymentText:
-      normalizeEnvValue(process.env.DEFAULT_PAYMENT_TEXT) ||
-      'РћРїР»Р°С‚РёС‚Рµ РїРѕРґРїРёСЃРєСѓ РїРѕ РёРЅСЃС‚СЂСѓРєС†РёРё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° Рё РЅР°Р¶РјРёС‚Рµ "РЇ РѕРїР»Р°С‚РёР»".',
-    currency: normalizeEnvValue(process.env.CURRENCY) || "RUB",
-    prices: {
-      "7d": Number(normalizeEnvValue(process.env.DEFAULT_PRICE_7D) || "125"),
-      "30d": Number(normalizeEnvValue(process.env.DEFAULT_PRICE_30D) || "500"),
-      "90d": Number(normalizeEnvValue(process.env.DEFAULT_PRICE_90D) || "1200"),
-      lifetime: Number(normalizeEnvValue(process.env.DEFAULT_PRICE_LIFETIME) || "2500"),
-    },
   },
 };
 
