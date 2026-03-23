@@ -822,7 +822,7 @@ async function handleTextMessage(message) {
     }
 
     try {
-      db.setUserCredentials(currentUser.telegram_id, clientLogin, clientPassword);
+      db.setUserCredentials(currentUser.telegram_id, session.clientLogin, clientPassword);
     } catch (saveError) {
       if (isClientLoginTakenError(saveError)) {
         setSession(currentUser.telegram_id, { mode: "awaiting_client_login" });
